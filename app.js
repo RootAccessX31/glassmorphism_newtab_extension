@@ -1,4 +1,15 @@
-// --- 1. IndexedDB Wrapper (For Media Blobs - Base64 Encoding for Chrome Stability) ---
+// --- ANTI-FLASH INJECTION (Executes instantly to hide the dark-blue screen if video/image is selected) ---
+(function preventBackgroundFlash() {
+    const cachedBgType = localStorage.getItem('cachedBgType') || 'image';
+    if (cachedBgType === 'image' || cachedBgType === 'video') {
+        const style = document.createElement('style');
+        style.innerHTML = '#bg-color { display: none !important; }';
+        if (document.head) document.head.appendChild(style);
+        else document.documentElement.appendChild(style);
+    }
+})();
+
+// --- 1. Fast IndexedDB Wrapper (Native ArrayBuffer) ---
 const DB_NAME = 'DashboardMediaDB';
 
 function initDB() {
@@ -19,30 +30,22 @@ function initDB() {
     });
 }
 
-function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-}
-
 async function saveMediaBlob(key, blob) {
     const db = await initDB();
     if (!db) return;
     try {
-        const base64Data = await blobToBase64(blob);
+        const buffer = await blob.arrayBuffer(); // Extremely fast binary storage
+        const type = blob.type;
         return new Promise(resolve => {
             try {
                 const tx = db.transaction('media', 'readwrite');
-                tx.objectStore('media').put(base64Data, key);
+                tx.objectStore('media').put({ buffer, type }, key);
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => resolve();
             } catch (e) { resolve(); }
         });
     } catch (e) {
-        console.error("Failed to save media", e);
+        console.error("Failed to save media buffer", e);
     }
 }
 
@@ -54,14 +57,20 @@ async function getMediaBlob(key) {
             const req = db.transaction('media').objectStore('media').get(key);
             req.onsuccess = () => {
                 const res = req.result;
-                resolve(res || null);
+                if (res && res.buffer) {
+                    resolve(new Blob([res.buffer], { type: res.type })); // Fast binary reassembly
+                } else if (res) {
+                    resolve(res); 
+                } else {
+                    resolve(null);
+                }
             };
             req.onerror = () => resolve(null);
         } catch (e) { resolve(null); }
     });
 }
 
-// Start fetching media immediately to eliminate loading delay
+// Start fetching media immediately before the rest of the script loads
 let preloadedMediaPromise = getMediaBlob('customBg').catch(() => null);
 
 // --- 2. State & Defaults ---
@@ -120,9 +129,9 @@ let cropMouseStartX = 0, cropMouseStartY = 0, cropStartPosX = 0, cropStartPosY =
 
 const FEEDBACK_API_URL = 'http://localhost:5000/api/feedback';
 
-// --- 3. Initialization ---
-function init() {
-    chrome.storage.local.get(['dashboardState'], (res) => {
+// --- 3. Synchronous Loading Initialization ---
+async function init() {
+    chrome.storage.local.get(['dashboardState'], async (res) => {
         try {
             if (res && res.dashboardState) {
                 appState = Object.assign({}, defaultState, res.dashboardState);
@@ -130,12 +139,15 @@ function init() {
                 if (!appState.widgets || appState.widgets.length === 0) appState.widgets = JSON.parse(JSON.stringify(defaultState.widgets));
             }
 
-            // Sync visual controls immediately
+            // Sync visual controls
             applyDockBlur();
             applyShortcutsVisibility();
             applyAdaptiveIcons();
 
-            // Render UI instantly without waiting
+            // AWAIT the background to load synchronously to perfectly align UI and Background
+            await applyBackground();
+
+            // Instantly render UI directly over the ready background
             renderWorkspace();
             renderShortcutsBar();
             renderEditShortcutsList();
@@ -143,9 +155,6 @@ function init() {
             setInterval(setupClockTick, 1000);
             bindUI();
             bindModalUI();
-
-            // Non-blocking background load utilizing the pre-fetch
-            applyBackground().catch(e => console.log("Bg warning:", e));
         } catch (err) {
             console.error("Init Error:", err);
             renderWorkspace();
@@ -185,31 +194,29 @@ async function applyBackground() {
         const imgEl = document.getElementById('bg-image');
         const vidEl = document.getElementById('bg-video');
 
-        if (bgColor) bgColor.style.backgroundColor = b.color || '#1a1a2e';
-        
-        if (imgEl) imgEl.style.display = 'none';
-        if (vidEl) {
-            vidEl.pause();
-            vidEl.removeAttribute('src');
-            vidEl.load();
-            vidEl.style.display = 'none';
-        }
+        if (!bgColor || !imgEl || !vidEl) return;
 
-        if (b.type === 'image' || b.type === 'video') {
+        if (b.type === 'color') {
+            bgColor.style.display = 'block';
+            bgColor.style.backgroundColor = b.color || '#1a1a2e';
+            imgEl.style.display = 'none';
+            vidEl.pause();
+            vidEl.style.display = 'none';
+        } else {
+            bgColor.style.display = 'none'; // Force hide solid color
             
-            // Wait for the pre-fetch to finish if it hasn't already
-            let mediaData = await preloadedMediaPromise;
-            preloadedMediaPromise = null; // reset so we fetch fresh next time
-            
-            if (!mediaData) {
-                mediaData = await getMediaBlob('customBg');
-            }
+            const mediaData = await preloadedMediaPromise || await getMediaBlob('customBg');
+            preloadedMediaPromise = null;
 
             const activeEl = b.type === 'image' ? imgEl : vidEl;
+            const inactiveEl = b.type === 'image' ? vidEl : imgEl;
+
+            inactiveEl.style.display = 'none';
+            if (inactiveEl.tagName === 'VIDEO') inactiveEl.pause();
 
             if (activeEl) {
-                if (mediaData && typeof mediaData === 'string') {
-                    activeEl.src = mediaData;
+                if (mediaData && mediaData instanceof Blob) {
+                    activeEl.src = URL.createObjectURL(mediaData);
                 } else if (b.type === 'image') {
                     activeEl.src = 'image_4af89b.jpg';
                 }
@@ -667,7 +674,6 @@ window.addEventListener('mouseup', () => {
 
 // --- 8. UI Binding (Connected to Panel) ---
 function bindUI() {
-    // 1. Show Shortcuts Toggle
     const settingShowShortcuts = document.getElementById('setting-show-shortcuts');
     if (settingShowShortcuts) {
         settingShowShortcuts.checked = appState.showShortcuts !== false;
@@ -678,7 +684,6 @@ function bindUI() {
         };
     }
 
-    // 2. Edit Shortcuts View Switch
     const mainView = document.getElementById('main-settings-view');
     const editView = document.getElementById('edit-shortcuts-view');
     const btnOpenEdit = document.getElementById('btn-open-edit-shortcuts');
@@ -717,7 +722,6 @@ function bindUI() {
         };
     }
 
-    // 3. Adaptive Icons Toggle
     const settingAdaptiveIcons = document.getElementById('setting-adaptive-icons');
     if (settingAdaptiveIcons) {
         settingAdaptiveIcons.checked = appState.adaptiveIcons !== false;
@@ -728,7 +732,6 @@ function bindUI() {
         };
     }
 
-    // 4. Dock Liquid Glass Blur
     const dockBlurSetting = document.getElementById('setting-dock-blur');
     if (dockBlurSetting) {
         dockBlurSetting.value = appState.dockBlur || 20;
@@ -739,7 +742,6 @@ function bindUI() {
         };
     }
 
-    // GitHub & Feedback
     const btnGithub = document.getElementById('btn-github');
     if (btnGithub) {
         btnGithub.onclick = () => window.open('https://github.com/', '_blank');
@@ -823,7 +825,6 @@ function bindUI() {
         }
     }
 
-    // Customize Panel toggles
     const editModeBtn = document.getElementById('btn-edit-mode');
     const settingsPanel = document.getElementById('settings-panel');
     if (editModeBtn && settingsPanel) {
@@ -878,6 +879,7 @@ function bindUI() {
         bgTypeSelect.value = appState.bg.type;
         bgTypeSelect.onchange = (e) => {
             appState.bg.type = e.target.value;
+            localStorage.setItem('cachedBgType', e.target.value); // Cache for instant loads
             saveState();
             applyBackground();
         };
@@ -917,13 +919,13 @@ function bindUI() {
             const mediaType = isVideo ? 'video' : 'image';
 
             appState.bg.type = mediaType;
+            localStorage.setItem('cachedBgType', mediaType); // Cache for instant loads
             if (bgTypeSelect) bgTypeSelect.value = mediaType;
 
             openCropModal(file, mediaType);
         };
     }
 
-    // Widgets management
     const btnAddClock = document.getElementById('btn-add-clock');
     if (btnAddClock) btnAddClock.onclick = () => addWidget('clock');
     const btnAddSearch = document.getElementById('btn-add-search');
@@ -935,7 +937,6 @@ function bindUI() {
     const btnAddNotes = document.getElementById('btn-add-notes');
     if (btnAddNotes) btnAddNotes.onclick = () => addWidget('notes');
 
-    // AI Tools Toggle
     const btnToggleAi = document.getElementById('btn-toggle-ai');
     const widgetAiTools = document.getElementById('widget-ai-tools');
     const widgetShortcuts = document.getElementById('widget-shortcuts');
@@ -1120,6 +1121,7 @@ function bindModalUI() {
 
             const bgTypeSelect = document.getElementById('setting-bg-type');
             if (bgTypeSelect) bgTypeSelect.value = modalMediaType;
+            localStorage.setItem('cachedBgType', modalMediaType);
 
             saveState();
             await applyBackground();
