@@ -2,7 +2,7 @@
 
 A highly customizable, modern, glassmorphic new tab dashboard.
 
-<img width="1917" height="1078" alt="Screenshot 2026-10-02 145723" src="https://github.com/user-attachments/assets/4e39dd6b-a38a-4e19-9da0-3e794d595083" />
+<img width="1917" height="1078" alt="Screenshot 2026-10-10 142657" src="https://github.com/user-attachments/assets/c25d18dc-c15b-4e47-af05-263db50b498c" />
 
 ## Installation & Setup
 
