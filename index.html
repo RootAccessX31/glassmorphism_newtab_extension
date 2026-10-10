@@ -81,7 +81,7 @@
                         </div>
                         <div class="mat-row">
                             <div class="mat-text"><strong>Adaptive Icons</strong><span>Shortcut icons will adapt to theme</span></div>
-                            <label class="mat-switch"><input type="checkbox" checked><span class="slider"></span></label>
+                            <label class="mat-switch"><input type="checkbox" id="setting-adaptive-icons" checked><span class="slider"></span></label>
                         </div>
                         <div class="mat-row">
                             <div class="mat-text" style="width: 100%;">
@@ -125,7 +125,7 @@
                 </div>
                 
                 <!-- Appearance / Background -->
-                 <div class="mat-card">
+                <div class="mat-card">
                     <div class="mat-card-header"><h3>Appearance</h3><span class="chevron">▼</span></div>
                     <div class="mat-card-body hidden">
                         <div class="mat-text" style="margin-bottom: 5px;"><strong>Background Mode</strong></div>
@@ -153,8 +153,6 @@
                 <div id="widget-editor" class="mat-card hidden">
                     <div class="mat-card-header"><h3>Edit Selected Widget</h3><span class="chevron">▲</span></div>
                     <div class="mat-card-body">
-                        
-                        <!-- Spotify URL Input -->
                         <div id="spotify-edit-group" class="hidden">
                             <div class="mat-text"><strong>Spotify Link</strong></div>
                             <input type="text" id="edit-w-sp-url" placeholder="Paste Spotify track or playlist link..." class="mat-input" style="margin-bottom: 10px;">
@@ -166,7 +164,6 @@
                         <div class="mat-text"><strong>Glass Blur (px)</strong></div>
                         <input type="range" id="edit-w-blur" min="0" max="40" step="1" style="width: 100%; margin-bottom: 10px;">
 
-                        <!-- Corner Curve Control -->
                         <div class="mat-text"><strong>Corner Curve: <span id="val-w-radius">0</span>px</strong></div>
                         <input type="range" id="edit-w-radius" min="0" max="100" step="1" style="width: 100%; margin-bottom: 10px;">
 
@@ -198,13 +195,11 @@
     <!-- Choose Visible Area / Media Customization Modal -->
     <div id="media-crop-modal" class="modal-backdrop hidden">
         <div class="crop-modal-card">
-            <!-- Modal Header -->
             <div class="crop-modal-header">
                 <h3>Choose visible area</h3>
                 <button id="btn-crop-close" class="crop-icon-btn">✕</button>
             </div>
 
-            <!-- Preview Viewport -->
             <div id="crop-viewport" class="crop-viewport">
                 <div id="crop-media-wrapper" class="crop-media-wrapper">
                     <img id="crop-preview-img" alt="Preview">
@@ -213,7 +208,6 @@
                 <div class="crop-reposition-badge">Drag to reposition</div>
             </div>
 
-            <!-- Controls Row 1 (Blur & Brightness) -->
             <div class="crop-controls-row">
                 <button id="btn-crop-blur" class="crop-pill-btn">Blur: Off</button>
                 <div class="crop-slider-group">
@@ -223,7 +217,6 @@
                 </div>
             </div>
             
-            <!-- Video Sound Row (Only visible for videos) -->
             <div id="crop-video-sound-row" class="crop-controls-row" style="display: none; justify-content: space-between; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; padding: 12px 18px;">
                 <div style="display: flex; flex-direction: column;">
                     <strong style="font-size: 1rem; font-weight: 600;">Video Sound</strong>
@@ -232,7 +225,6 @@
                 <label class="mat-switch"><input type="checkbox" id="crop-video-sound"><span class="slider"></span></label>
             </div>
 
-            <!-- Controls Row 2 (Actions) -->
             <div class="crop-actions-row">
                 <div class="crop-actions-left">
                     <button id="btn-crop-center" class="crop-action-btn">Center</button>
