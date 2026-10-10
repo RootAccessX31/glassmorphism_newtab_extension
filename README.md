@@ -2,7 +2,8 @@
 
 A highly customizable, modern, glassmorphic new tab dashboard.
 
-<img width="1917" height="1078" alt="Screenshot 2026-10-10 142657" src="https://github.com/user-attachments/assets/c25d18dc-c15b-4e47-af05-263db50b498c" />
+<img width="1599" height="898" alt="WhatsApp Image 2026-10-10 at 7 11 29 PM" src="https://github.com/user-attachments/assets/bfbac910-34a4-4f94-882c-d5d1e582ecf7" />
+
 
 ## Installation & Setup
 1) Download the ZIP: Click the green Code button near the top right of the repository file list, then select Download ZIP.
