@@ -1,10 +1,16 @@
-// --- 1. IndexedDB Wrapper (For Media Blobs) ---
+// --- 1. IndexedDB Wrapper ---
 const DB_NAME = 'DashboardMediaDB';
+
 function initDB() {
     return new Promise((resolve) => {
         try {
             const req = indexedDB.open(DB_NAME, 1);
-            req.onupgradeneeded = (e) => e.target.result.createObjectStore('media');
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('media')) {
+                    db.createObjectStore('media');
+                }
+            };
             req.onsuccess = (e) => resolve(e.target.result);
             req.onerror = () => resolve(null);
         } catch (e) {
@@ -12,41 +18,41 @@ function initDB() {
         }
     });
 }
+
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
 async function saveMediaBlob(key, blob) {
     const db = await initDB();
     if (!db) return;
-    
     try {
-        const buffer = await blob.arrayBuffer();
-        const type = blob.type;
+        const base64Data = await blobToBase64(blob);
         return new Promise(resolve => {
             try {
                 const tx = db.transaction('media', 'readwrite');
-                tx.objectStore('media').put({ buffer, type }, key);
+                tx.objectStore('media').put(base64Data, key);
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => resolve();
             } catch (e) { resolve(); }
         });
     } catch (e) {
-        console.error("Failed to convert media to buffer", e);
+        console.error("Failed to save media", e);
     }
 }
+
 async function getMediaBlob(key) {
     const db = await initDB();
     if (!db) return null;
     return new Promise(resolve => {
         try {
             const req = db.transaction('media').objectStore('media').get(key);
-            req.onsuccess = () => {
-                const res = req.result;
-                if (res && res.buffer) {
-                    resolve(new Blob([res.buffer], { type: res.type }));
-                } else if (res) {
-                    resolve(res); 
-                } else {
-                    resolve(null);
-                }
-            };
+            req.onsuccess = () => resolve(req.result || null);
             req.onerror = () => resolve(null);
         } catch (e) { resolve(null); }
     });
@@ -75,7 +81,9 @@ const defaultBgState = {
 
 const defaultState = {
     bg: defaultBgState,
-    dockBlur: 20, 
+    dockBlur: 20,
+    showShortcuts: true,
+    adaptiveIcons: true,
     shortcuts: defaultShortcuts,
     widgets: [
         { id: 'w_clock', type: 'clock', x: 100, y: 100, width: 350, height: 150, op: 0.1, color: '255,255,255', blur: 15, borderOp: 0.2, radius: 24 },
@@ -106,26 +114,21 @@ let cropMouseStartX = 0, cropMouseStartY = 0, cropStartPosX = 0, cropStartPosY =
 
 const FEEDBACK_API_URL = 'http://localhost:5000/api/feedback';
 
-// --- 3. Core Initialization ---
+// --- 3. Initialization ---
 function init() {
     chrome.storage.local.get(['dashboardState'], (res) => {
         try {
             if (res && res.dashboardState) {
-                appState = res.dashboardState;
+                appState = Object.assign({}, defaultState, res.dashboardState);
                 if (!appState.shortcuts || appState.shortcuts.length === 0) appState.shortcuts = JSON.parse(JSON.stringify(defaultShortcuts));
                 if (!appState.widgets || appState.widgets.length === 0) appState.widgets = JSON.parse(JSON.stringify(defaultState.widgets));
-                if (appState.dockBlur === undefined) appState.dockBlur = 20;
-                if (!appState.bg) appState.bg = JSON.parse(JSON.stringify(defaultBgState));
-                if (appState.bg.brightness === undefined) appState.bg.brightness = 100;
-                if (appState.bg.blur === undefined) appState.bg.blur = false;
-                if (appState.bg.posX === undefined) appState.bg.posX = 0;
-                if (appState.bg.posY === undefined) appState.bg.posY = 0;
-                if (appState.bg.rotation === undefined) appState.bg.rotation = 0;
-                if (appState.bg.soundEnabled === undefined) appState.bg.soundEnabled = false;
             }
-            
-            // 1. Render fast UI elements synchronously so there is no visual delay
+
+            // Sync visual controls immediately
             applyDockBlur();
+            applyShortcutsVisibility();
+            applyAdaptiveIcons();
+
             renderWorkspace();
             renderShortcutsBar();
             renderEditShortcutsList();
@@ -133,12 +136,11 @@ function init() {
             setInterval(setupClockTick, 1000);
             bindUI();
             bindModalUI();
-            
-            // 2. Load heavy media asynchronously without blocking the UI
-            applyBackground().catch(e => console.log("Bg warning:", e));
 
+            // Load media asynchronously without blocking UI render
+            applyBackground().catch(e => console.log("Bg warning:", e));
         } catch (err) {
-            console.error("Initialization fallback active:", err);
+            console.error("Init Error:", err);
             renderWorkspace();
             renderShortcutsBar();
             bindUI();
@@ -154,54 +156,69 @@ function applyDockBlur() {
     document.documentElement.style.setProperty('--dock-blur', (appState.dockBlur || 20) + 'px');
 }
 
-// --- 4. Background Rendering ---
-async function applyBackground() {
-    const b = appState.bg || defaultBgState;
-    const bgColor = document.getElementById('bg-color');
-    const imgEl = document.getElementById('bg-image');
-    const vidEl = document.getElementById('bg-video');
-
-    if (!bgColor || !imgEl || !vidEl) return; 
-
-    // Apply base color immediately
-    bgColor.style.backgroundColor = b.color || '#1a1a2e';
-    imgEl.style.display = 'none';
-    
-    vidEl.pause();
-    vidEl.removeAttribute('src');
-    vidEl.load();
-    vidEl.style.display = 'none';
-
-    // Fetch and apply media asynchronously
-    if (b.type === 'image' || b.type === 'video') {
-        const blob = await getMediaBlob('customBg');
-        const activeEl = b.type === 'image' ? imgEl : vidEl;
-
-        if (activeEl) {
-            if (blob) {
-                activeEl.src = URL.createObjectURL(blob);
-            } else if (b.type === 'image') {
-                activeEl.src = 'image_4af89b.jpg';
-            }
-
-            if (b.type === 'video') {
-                activeEl.muted = !b.soundEnabled;
-                activeEl.play().catch(() => {});
-            }
-
-            activeEl.style.display = 'block';
-            activeEl.style.filter = `brightness(${b.brightness || 100}%) ${b.blur ? 'blur(16px)' : ''}`;
-            activeEl.style.transform = `translate(calc(-50% + ${b.posX || 0}px), calc(-50% + ${b.posY || 0}px)) rotate(${b.rotation || 0}deg) scale(1.15)`;
-        }
+function applyShortcutsVisibility() {
+    const dock = document.getElementById('widget-shortcuts');
+    if (dock) {
+        dock.style.display = appState.showShortcuts !== false ? 'flex' : 'none';
     }
 }
 
-// --- 5. Workspace & Shortcut Rendering ---
+function applyAdaptiveIcons() {
+    const isAdaptive = appState.adaptiveIcons !== false;
+    document.querySelectorAll('.shortcut-icon img').forEach(img => {
+        img.style.filter = isAdaptive ? 'grayscale(0.2) contrast(1.1)' : 'none';
+    });
+}
+
+// --- 4. Background Rendering ---
+async function applyBackground() {
+    try {
+        const b = appState.bg || defaultBgState;
+        const bgColor = document.getElementById('bg-color');
+        const imgEl = document.getElementById('bg-image');
+        const vidEl = document.getElementById('bg-video');
+
+        if (bgColor) bgColor.style.backgroundColor = b.color || '#1a1a2e';
+        if (imgEl) imgEl.style.display = 'none';
+        if (vidEl) {
+            vidEl.pause();
+            vidEl.removeAttribute('src');
+            vidEl.load();
+            vidEl.style.display = 'none';
+        }
+
+        if (b.type === 'image' || b.type === 'video') {
+            const mediaData = await getMediaBlob('customBg');
+            const activeEl = b.type === 'image' ? imgEl : vidEl;
+
+            if (activeEl) {
+                if (mediaData && typeof mediaData === 'string') {
+                    activeEl.src = mediaData;
+                } else if (b.type === 'image') {
+                    activeEl.src = 'image_4af89b.jpg';
+                }
+
+                if (b.type === 'video' && vidEl) {
+                    vidEl.muted = !b.soundEnabled;
+                    vidEl.play().catch(() => {});
+                }
+
+                activeEl.style.display = 'block';
+                activeEl.style.filter = `brightness(${b.brightness || 100}%) ${b.blur ? 'blur(16px)' : ''}`;
+                activeEl.style.transform = `translate(calc(-50% + ${b.posX || 0}px), calc(-50% + ${b.posY || 0}px)) rotate(${b.rotation || 0}deg) scale(1.15)`;
+            }
+        }
+    } catch (err) {
+        console.error("Background render error:", err);
+    }
+}
+
+// --- 5. Workspace & Widgets ---
 function renderWorkspace() {
     const ws = document.getElementById('workspace');
     if (!ws) return;
     const currentIds = appState.widgets.map(w => w.id);
-    
+
     Array.from(ws.children).forEach(child => {
         if (child.id !== 'widget-ai-tools' && child.id !== 'widget-shortcuts') {
             if (!currentIds.includes(child.id)) ws.removeChild(child);
@@ -211,7 +228,7 @@ function renderWorkspace() {
     appState.widgets.forEach(w => {
         let el = document.getElementById(w.id);
         let isNew = false;
-        
+
         if (!el) {
             isNew = true;
             el = document.createElement('div');
@@ -224,7 +241,7 @@ function renderWorkspace() {
             `;
             ws.appendChild(el);
         }
-        
+
         updateWidgetStyle(w);
 
         if (isNew) {
@@ -241,15 +258,17 @@ function renderWorkspace() {
 function updateWidgetStyle(w) {
     const el = document.getElementById(w.id);
     if (!el) return;
-    el.style.setProperty('--w-x', w.x + 'px');
-    el.style.setProperty('--w-y', w.y + 'px');
-    el.style.setProperty('--w-width', w.width + 'px');
-    el.style.setProperty('--w-height', w.height + 'px');
-    el.style.setProperty('--w-bg-opacity', w.op);
-    el.style.setProperty('--w-bg-color', w.color);
-    el.style.setProperty('--w-blur', w.blur + 'px');
-    el.style.setProperty('--w-border-op', w.borderOp);
-    el.style.setProperty('--w-radius', w.radius + 'px');
+    try {
+        el.style.setProperty('--w-x', w.x + 'px');
+        el.style.setProperty('--w-y', w.y + 'px');
+        el.style.setProperty('--w-width', w.width + 'px');
+        el.style.setProperty('--w-height', w.height + 'px');
+        el.style.setProperty('--w-bg-opacity', w.op);
+        el.style.setProperty('--w-bg-color', w.color);
+        el.style.setProperty('--w-blur', w.blur + 'px');
+        el.style.setProperty('--w-border-op', w.borderOp);
+        el.style.setProperty('--w-radius', w.radius + 'px');
+    } catch(e){}
 }
 
 function rebuildWidgetContent(w, el = null) {
@@ -312,9 +331,7 @@ function rebuildWidgetContent(w, el = null) {
                 <input type="text" class="todo-input" placeholder="Add task...">
                 <button class="btn-todo-add">+</button>
             </div>
-            <div class="todo-list">
-                ${tasksHtml}
-            </div>
+            <div class="todo-list">${tasksHtml}</div>
         `;
     } else if (w.type === 'notes') {
         const notes = w.notes || [];
@@ -336,16 +353,14 @@ function rebuildWidgetContent(w, el = null) {
                 <h3>Notes</h3>
                 <button class="btn-notes-add">+</button>
             </div>
-            <div class="notes-list">
-                ${notesHtml}
-            </div>
+            <div class="notes-list">${notesHtml}</div>
         `;
     }
 
     contentDiv.innerHTML = contentHtml;
 
     if (w.type === 'clock') setupClockTick();
-    
+
     if (w.type === 'todo') {
         const addBtn = el.querySelector('.btn-todo-add');
         const input = el.querySelector('.todo-input');
@@ -362,7 +377,7 @@ function rebuildWidgetContent(w, el = null) {
         };
 
         if (addBtn) addBtn.onclick = addTask;
-        if (input) input.onkeypress = (e) => { if(e.key === 'Enter') addTask(); };
+        if (input) input.onkeypress = (e) => { if (e.key === 'Enter') addTask(); };
 
         if (list) {
             list.onclick = (e) => {
@@ -430,7 +445,7 @@ function rebuildWidgetContent(w, el = null) {
     if (w.type === 'search') {
         const aiBtn = el.querySelector('.btn-ai-mode');
         const searchInput = el.querySelector('.search-input');
-        
+
         if (aiBtn) {
             aiBtn.onclick = (e) => {
                 if (isEditing) return;
@@ -446,36 +461,39 @@ function rebuildWidgetContent(w, el = null) {
     }
 }
 
+// --- 6. Shortcuts Bar & Edit View ---
 function renderShortcutsBar() {
     const container = document.getElementById('widget-shortcuts');
     if (!container) return;
     container.innerHTML = '';
-    
+
     if (appState.shortcuts) {
         appState.shortcuts.forEach(s => {
             const link = document.createElement('a');
             link.className = 'shortcut-icon';
             link.href = s.url;
             link.title = s.name;
-            
+
             let iconSrc = s.customIcon;
             if (!iconSrc) {
                 let domain = '#';
                 try { domain = new URL(s.url).hostname; } catch(e){}
                 iconSrc = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
             }
-            
+
             link.innerHTML = `<img src="${iconSrc}" alt="${s.name}" onerror="this.style.display='none'">`;
             container.appendChild(link);
         });
     }
+
+    applyAdaptiveIcons();
 }
 
 function renderEditShortcutsList() {
     const container = document.getElementById('shortcuts-edit-list');
     if (!container) return;
     container.innerHTML = '';
-    
+
     if (appState.shortcuts) {
         appState.shortcuts.forEach(s => {
             const card = document.createElement('div');
@@ -512,13 +530,13 @@ function renderEditShortcutsList() {
             renderShortcutsBar();
         };
     });
-    
+
     container.querySelectorAll('.btn-up-sc').forEach(btn => {
         btn.onclick = () => {
             const id = btn.dataset.id;
             const targetSC = appState.shortcuts.find(sc => sc.id === id);
             if (!targetSC) return;
-            
+
             const fileInput = document.createElement('input');
             fileInput.type = 'file';
             fileInput.accept = 'image/*';
@@ -527,10 +545,10 @@ function renderEditShortcutsList() {
                 if (!file) return;
                 const reader = new FileReader();
                 reader.onload = (eReader) => {
-                    targetSC.customIcon = eReader.target.result; 
+                    targetSC.customIcon = eReader.target.result;
                     saveState();
-                    renderEditShortcutsList(); 
-                    renderShortcutsBar();      
+                    renderEditShortcutsList();
+                    renderShortcutsBar();
                 };
                 reader.readAsDataURL(file);
             };
@@ -559,7 +577,7 @@ function setupClockTick() {
     });
 }
 
-// --- 6. Drag & Resize Logic ---
+// --- 7. Drag & Resize Logic ---
 function handleDragStart(e, w) {
     if (!isEditing || e.target.classList.contains('resize-handle')) return;
     if (['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
@@ -586,8 +604,10 @@ window.addEventListener('mousemove', (e) => {
         currentW.y = startWy + (e.clientY - startY);
         const el = document.getElementById(currentW.id);
         if (el) {
-            el.style.setProperty('--w-x', currentW.x + 'px');
-            el.style.setProperty('--w-y', currentW.y + 'px');
+            try {
+                el.style.setProperty('--w-x', currentW.x + 'px');
+                el.style.setProperty('--w-y', currentW.y + 'px');
+            } catch(e){}
         }
     }
     if (isResizing && currentW) {
@@ -595,15 +615,19 @@ window.addEventListener('mousemove', (e) => {
         currentW.height = Math.max(50, startWh + (e.clientY - startY));
         const el = document.getElementById(currentW.id);
         if (el) {
-            el.style.setProperty('--w-width', currentW.width + 'px');
-            el.style.setProperty('--w-height', currentW.height + 'px');
+            try {
+                el.style.setProperty('--w-width', currentW.width + 'px');
+                el.style.setProperty('--w-height', currentW.height + 'px');
+            } catch(e){}
         }
     }
     if (isDraggingPanel) {
         const settingsPanel = document.getElementById('settings-panel');
         if (settingsPanel) {
-            settingsPanel.style.left = (pStartX + (e.clientX - pStartMouseX)) + 'px';
-            settingsPanel.style.top = (pStartY + (e.clientY - pStartMouseY)) + 'px';
+            try {
+                settingsPanel.style.left = (pStartX + (e.clientX - pStartMouseX)) + 'px';
+                settingsPanel.style.top = (pStartY + (e.clientY - pStartMouseY)) + 'px';
+            } catch(e){}
         }
     }
     if (isDraggingCrop) {
@@ -621,8 +645,81 @@ window.addEventListener('mouseup', () => {
     isDraggingCrop = false;
 });
 
-// --- 7. Settings UI Binding ---
+// --- 8. UI Binding (Connected to Panel) ---
 function bindUI() {
+    // 1. Show Shortcuts Toggle
+    const settingShowShortcuts = document.getElementById('setting-show-shortcuts');
+    if (settingShowShortcuts) {
+        settingShowShortcuts.checked = appState.showShortcuts !== false;
+        settingShowShortcuts.onchange = (e) => {
+            appState.showShortcuts = e.target.checked;
+            applyShortcutsVisibility();
+            saveState();
+        };
+    }
+
+    // 2. Edit Shortcuts View Switch
+    const mainView = document.getElementById('main-settings-view');
+    const editView = document.getElementById('edit-shortcuts-view');
+    const btnOpenEdit = document.getElementById('btn-open-edit-shortcuts');
+    const btnBackEdit = document.getElementById('btn-back-shortcuts');
+
+    if (btnOpenEdit && mainView && editView) {
+        btnOpenEdit.onclick = () => {
+            mainView.classList.add('hidden');
+            editView.classList.remove('hidden');
+        };
+    }
+    if (btnBackEdit && mainView && editView) {
+        btnBackEdit.onclick = () => {
+            editView.classList.add('hidden');
+            mainView.classList.remove('hidden');
+        };
+    }
+
+    const btnAddShortcut = document.getElementById('btn-add-shortcut');
+    if (btnAddShortcut) {
+        btnAddShortcut.onclick = () => {
+            appState.shortcuts.unshift({ id: 's_' + Date.now(), name: 'New Shortcut', url: 'https://', customIcon: '' });
+            saveState();
+            renderEditShortcutsList();
+            renderShortcutsBar();
+        };
+    }
+
+    const btnResetShortcuts = document.getElementById('btn-reset-shortcuts');
+    if (btnResetShortcuts) {
+        btnResetShortcuts.onclick = () => {
+            appState.shortcuts = JSON.parse(JSON.stringify(defaultShortcuts));
+            saveState();
+            renderEditShortcutsList();
+            renderShortcutsBar();
+        };
+    }
+
+    // 3. Adaptive Icons Toggle
+    const settingAdaptiveIcons = document.getElementById('setting-adaptive-icons');
+    if (settingAdaptiveIcons) {
+        settingAdaptiveIcons.checked = appState.adaptiveIcons !== false;
+        settingAdaptiveIcons.onchange = (e) => {
+            appState.adaptiveIcons = e.target.checked;
+            applyAdaptiveIcons();
+            saveState();
+        };
+    }
+
+    // 4. Dock Liquid Glass Blur
+    const dockBlurSetting = document.getElementById('setting-dock-blur');
+    if (dockBlurSetting) {
+        dockBlurSetting.value = appState.dockBlur || 20;
+        dockBlurSetting.oninput = (e) => {
+            appState.dockBlur = e.target.value;
+            applyDockBlur();
+            saveState();
+        };
+    }
+
+    // GitHub & Feedback
     const btnGithub = document.getElementById('btn-github');
     if (btnGithub) {
         btnGithub.onclick = () => window.open('https://github.com/', '_blank');
@@ -706,6 +803,7 @@ function bindUI() {
         }
     }
 
+    // Customize Panel toggles
     const editModeBtn = document.getElementById('btn-edit-mode');
     const settingsPanel = document.getElementById('settings-panel');
     if (editModeBtn && settingsPanel) {
@@ -714,9 +812,11 @@ function bindUI() {
             document.body.classList.toggle('is-editing', isEditing);
             settingsPanel.classList.toggle('hidden', !isEditing);
             if (isEditing) {
-                settingsPanel.style.left = 'auto';
-                settingsPanel.style.right = '20px';
-                settingsPanel.style.top = '20px';
+                try {
+                    settingsPanel.style.left = 'auto';
+                    settingsPanel.style.right = '20px';
+                    settingsPanel.style.top = '20px';
+                } catch(e){}
             }
             if (!isEditing) deselectWidget();
         };
@@ -735,9 +835,11 @@ function bindUI() {
                 pStartY = rect.top;
                 pStartMouseX = e.clientX;
                 pStartMouseY = e.clientY;
-                settingsPanel.style.right = 'auto';
-                settingsPanel.style.left = pStartX + 'px';
-                settingsPanel.style.top = pStartY + 'px';
+                try {
+                    settingsPanel.style.right = 'auto';
+                    settingsPanel.style.left = pStartX + 'px';
+                    settingsPanel.style.top = pStartY + 'px';
+                } catch(e){}
             });
         }
     }
@@ -763,7 +865,7 @@ function bindUI() {
 
     const btnAdjustBg = document.getElementById('btn-adjust-bg');
     const bgUpload = document.getElementById('setting-bg-upload');
-    
+
     if (btnAdjustBg) {
         btnAdjustBg.onclick = async () => {
             if (bgUpload && bgUpload.files && bgUpload.files.length > 0) {
@@ -774,7 +876,7 @@ function bindUI() {
             }
 
             const blob = await getMediaBlob('customBg');
-            if (blob) {
+            if (blob && typeof blob === 'string') {
                 openCropModal(blob, appState.bg.type);
             } else {
                 fetch('image_4af89b.jpg')
@@ -786,14 +888,14 @@ function bindUI() {
     }
 
     if (bgUpload) {
-        bgUpload.onclick = (e) => { e.target.value = null; }; 
+        bgUpload.onclick = (e) => { e.target.value = null; };
         bgUpload.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
             const isVideo = file.type.includes('video') || file.name.endsWith('.mp4');
             const mediaType = isVideo ? 'video' : 'image';
-            
+
             appState.bg.type = mediaType;
             if (bgTypeSelect) bgTypeSelect.value = mediaType;
 
@@ -801,6 +903,7 @@ function bindUI() {
         };
     }
 
+    // Widgets management
     const btnAddClock = document.getElementById('btn-add-clock');
     if (btnAddClock) btnAddClock.onclick = () => addWidget('clock');
     const btnAddSearch = document.getElementById('btn-add-search');
@@ -812,38 +915,30 @@ function bindUI() {
     const btnAddNotes = document.getElementById('btn-add-notes');
     if (btnAddNotes) btnAddNotes.onclick = () => addWidget('notes');
 
-    const dockBlurSetting = document.getElementById('setting-dock-blur');
-    if (dockBlurSetting) {
-        dockBlurSetting.value = appState.dockBlur || 20;
-        dockBlurSetting.oninput = (e) => {
-            appState.dockBlur = e.target.value;
-            applyDockBlur();
-            saveState();
-        };
-    }
-    
+    // AI Tools Toggle
     const btnToggleAi = document.getElementById('btn-toggle-ai');
     const widgetAiTools = document.getElementById('widget-ai-tools');
     const widgetShortcuts = document.getElementById('widget-shortcuts');
     const settingShowAi = document.getElementById('setting-show-ai');
-    
+
     if (btnToggleAi && widgetAiTools && widgetShortcuts) {
         btnToggleAi.onclick = () => {
             widgetAiTools.classList.toggle('expanded');
             widgetShortcuts.classList.toggle('slide-out-right');
         };
     }
-    
+
     if (settingShowAi && widgetAiTools) {
         settingShowAi.onchange = (e) => {
-            widgetAiTools.style.display = e.target.checked ? 'flex' : 'none';
+            try {
+                widgetAiTools.style.display = e.target.checked ? 'flex' : 'none';
+            } catch(e){}
         };
     }
 }
 
-// --- 8. Media Customization Modal Logic ---
-function openCropModal(blob, type) {
-    modalBlob = blob;
+// --- 9. Media Customizer Modal ---
+async function openCropModal(fileOrBase64, type) {
     modalMediaType = type;
 
     modalStaging = {
@@ -858,12 +953,20 @@ function openCropModal(blob, type) {
     const modal = document.getElementById('media-crop-modal');
     const imgEl = document.getElementById('crop-preview-img');
     const vidEl = document.getElementById('crop-preview-video');
-    const url = URL.createObjectURL(blob);
+
+    let renderUrl = '';
+    if (typeof fileOrBase64 === 'string') {
+        renderUrl = fileOrBase64;
+        modalBlob = null;
+    } else {
+        renderUrl = URL.createObjectURL(fileOrBase64);
+        modalBlob = fileOrBase64;
+    }
 
     if (modalMediaType === 'video') {
         if (imgEl) imgEl.style.display = 'none';
         if (vidEl) {
-            vidEl.src = url;
+            vidEl.src = renderUrl;
             vidEl.muted = !modalStaging.soundEnabled;
             vidEl.style.display = 'block';
             vidEl.play().catch(() => {});
@@ -874,7 +977,7 @@ function openCropModal(blob, type) {
             vidEl.style.display = 'none';
         }
         if (imgEl) {
-            imgEl.src = url;
+            imgEl.src = renderUrl;
             imgEl.style.display = 'block';
         }
     }
@@ -883,7 +986,7 @@ function openCropModal(blob, type) {
     if (brightnessEl) brightnessEl.value = modalStaging.brightness;
     const valBrightnessEl = document.getElementById('val-crop-brightness');
     if (valBrightnessEl) valBrightnessEl.textContent = `${modalStaging.brightness}%`;
-    
+
     const blurBtn = document.getElementById('btn-crop-blur');
     if (blurBtn) {
         blurBtn.textContent = modalStaging.blur ? 'Blur: On' : 'Blur: Off';
@@ -898,8 +1001,10 @@ function updateModalPreviewTransform() {
     const activeEl = modalMediaType === 'video' ? document.getElementById('crop-preview-video') : document.getElementById('crop-preview-img');
     if (!activeEl) return;
 
-    activeEl.style.filter = `brightness(${modalStaging.brightness}%) ${modalStaging.blur ? 'blur(10px)' : ''}`;
-    activeEl.style.transform = `translate(${modalStaging.posX}px, ${modalStaging.posY}px) rotate(${modalStaging.rotation}deg) scale(1.15)`;
+    try {
+        activeEl.style.filter = `brightness(${modalStaging.brightness}%) ${modalStaging.blur ? 'blur(10px)' : ''}`;
+        activeEl.style.transform = `translate(${modalStaging.posX}px, ${modalStaging.posY}px) rotate(${modalStaging.rotation}deg) scale(1.15)`;
+    } catch(e){}
 }
 
 function closeCropModal() {
@@ -907,7 +1012,6 @@ function closeCropModal() {
     if (modal) modal.classList.add('hidden');
     const vidEl = document.getElementById('crop-preview-video');
     if (vidEl) vidEl.pause();
-    modalBlob = null;
 }
 
 function bindModalUI() {
@@ -996,7 +1100,7 @@ function bindModalUI() {
 
             const bgTypeSelect = document.getElementById('setting-bg-type');
             if (bgTypeSelect) bgTypeSelect.value = modalMediaType;
-            
+
             saveState();
             await applyBackground();
             closeCropModal();
@@ -1004,7 +1108,7 @@ function bindModalUI() {
     }
 }
 
-// --- 9. Widget Helpers ---
+// --- 10. Widget Helpers ---
 function addWidget(type) {
     let wWidth = 300, wHeight = 100, wRadius = 16, spLink = '', tasks = [], notes = [];
     if (type === 'spotify') { wWidth = 360; wHeight = 352; }
@@ -1027,7 +1131,7 @@ function selectWidget(w) {
     document.querySelectorAll('.widget').forEach(el => el.classList.remove('selected'));
     const target = document.getElementById(w.id);
     if (target) target.classList.add('selected');
-    
+
     const editor = document.getElementById('widget-editor');
     if (editor) editor.classList.remove('hidden');
 
@@ -1056,7 +1160,7 @@ function selectWidget(w) {
             spGroup.classList.add('hidden');
         }
     }
-    
+
     const keys = { op: 'edit-w-op', blur: 'edit-w-blur', radius: 'edit-w-radius' };
     for (let [prop, id] of Object.entries(keys)) {
         const el = document.getElementById(id);
@@ -1074,12 +1178,12 @@ function selectWidget(w) {
             };
         }
     }
-    
+
     const valOp = document.getElementById('val-w-op');
     if (valOp) valOp.textContent = Math.round((w.op || 0.2) * 100);
     const valRad = document.getElementById('val-w-radius');
     if (valRad) valRad.textContent = w.radius || 16;
-    
+
     const btnDel = document.getElementById('btn-delete-widget');
     if (btnDel) {
         btnDel.onclick = () => {
