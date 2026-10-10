@@ -1,4 +1,4 @@
-// --- 1. IndexedDB Wrapper ---
+// --- 1. IndexedDB Wrapper (For Media Blobs - Base64 Encoding for Chrome Stability) ---
 const DB_NAME = 'DashboardMediaDB';
 
 function initDB() {
@@ -52,11 +52,17 @@ async function getMediaBlob(key) {
     return new Promise(resolve => {
         try {
             const req = db.transaction('media').objectStore('media').get(key);
-            req.onsuccess = () => resolve(req.result || null);
+            req.onsuccess = () => {
+                const res = req.result;
+                resolve(res || null);
+            };
             req.onerror = () => resolve(null);
         } catch (e) { resolve(null); }
     });
 }
+
+// Start fetching media immediately to eliminate loading delay
+let preloadedMediaPromise = getMediaBlob('customBg').catch(() => null);
 
 // --- 2. State & Defaults ---
 const defaultShortcuts = [
@@ -129,6 +135,7 @@ function init() {
             applyShortcutsVisibility();
             applyAdaptiveIcons();
 
+            // Render UI instantly without waiting
             renderWorkspace();
             renderShortcutsBar();
             renderEditShortcutsList();
@@ -137,7 +144,7 @@ function init() {
             bindUI();
             bindModalUI();
 
-            // Load media asynchronously without blocking UI render
+            // Non-blocking background load utilizing the pre-fetch
             applyBackground().catch(e => console.log("Bg warning:", e));
         } catch (err) {
             console.error("Init Error:", err);
@@ -179,6 +186,7 @@ async function applyBackground() {
         const vidEl = document.getElementById('bg-video');
 
         if (bgColor) bgColor.style.backgroundColor = b.color || '#1a1a2e';
+        
         if (imgEl) imgEl.style.display = 'none';
         if (vidEl) {
             vidEl.pause();
@@ -188,7 +196,15 @@ async function applyBackground() {
         }
 
         if (b.type === 'image' || b.type === 'video') {
-            const mediaData = await getMediaBlob('customBg');
+            
+            // Wait for the pre-fetch to finish if it hasn't already
+            let mediaData = await preloadedMediaPromise;
+            preloadedMediaPromise = null; // reset so we fetch fresh next time
+            
+            if (!mediaData) {
+                mediaData = await getMediaBlob('customBg');
+            }
+
             const activeEl = b.type === 'image' ? imgEl : vidEl;
 
             if (activeEl) {
@@ -331,7 +347,9 @@ function rebuildWidgetContent(w, el = null) {
                 <input type="text" class="todo-input" placeholder="Add task...">
                 <button class="btn-todo-add">+</button>
             </div>
-            <div class="todo-list">${tasksHtml}</div>
+            <div class="todo-list">
+                ${tasksHtml}
+            </div>
         `;
     } else if (w.type === 'notes') {
         const notes = w.notes || [];
@@ -353,7 +371,9 @@ function rebuildWidgetContent(w, el = null) {
                 <h3>Notes</h3>
                 <button class="btn-notes-add">+</button>
             </div>
-            <div class="notes-list">${notesHtml}</div>
+            <div class="notes-list">
+                ${notesHtml}
+            </div>
         `;
     }
 
