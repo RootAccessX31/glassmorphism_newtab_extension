@@ -2,6 +2,8 @@
 
 A highly customizable, modern, glassmorphic new tab dashboard.
 
+<img width="1917" height="1078" alt="Screenshot 2026-10-02 145723" src="https://github.com/user-attachments/assets/4e39dd6b-a38a-4e19-9da0-3e794d595083" />
+
 ## Installation & Setup
 
 1. Create a new folder on your computer.
