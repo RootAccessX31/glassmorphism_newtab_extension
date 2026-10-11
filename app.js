@@ -1,4 +1,4 @@
-// --- 1. IndexedDB Wrapper (For Media Blobs - Base64 Encoding for Chrome Stability) ---
+// --- 1. IndexedDB Wrapper ---
 const DB_NAME = 'DashboardMediaDB';
 
 function initDB() {
@@ -33,6 +33,13 @@ async function saveMediaBlob(key, blob) {
     if (!db) return;
     try {
         const base64Data = await blobToBase64(blob);
+        // Persist to sync cache so reloading tabs open Image 2 instantly
+        try {
+            localStorage.setItem('dash_bg_media_cache', base64Data);
+        } catch (storageLimit) {
+            // If base64 is larger than localStorage quota, fallback to IDB only
+        }
+
         return new Promise(resolve => {
             try {
                 const tx = db.transaction('media', 'readwrite');
@@ -42,27 +49,25 @@ async function saveMediaBlob(key, blob) {
             } catch (e) { resolve(); }
         });
     } catch (e) {
-        console.error("Failed to save media", e);
+        console.error("Save error:", e);
     }
 }
 
 async function getMediaBlob(key) {
+    // Check instant localStorage cache first
+    const cached = localStorage.getItem('dash_bg_media_cache');
+    if (cached) return cached;
+
     const db = await initDB();
     if (!db) return null;
     return new Promise(resolve => {
         try {
             const req = db.transaction('media').objectStore('media').get(key);
-            req.onsuccess = () => {
-                const res = req.result;
-                resolve(res || null);
-            };
+            req.onsuccess = () => resolve(req.result || null);
             req.onerror = () => resolve(null);
         } catch (e) { resolve(null); }
     });
 }
-
-// Start fetching media immediately before the rest of the script loads
-let preloadedMediaPromise = getMediaBlob('customBg').catch(() => null);
 
 // --- 2. State & Defaults ---
 const defaultShortcuts = [
@@ -120,25 +125,37 @@ let cropMouseStartX = 0, cropMouseStartY = 0, cropStartPosX = 0, cropStartPosY =
 
 const FEEDBACK_API_URL = 'http://localhost:5000/api/feedback';
 
-// --- 3. Synchronous Loading Initialization ---
-async function init() {
-    chrome.storage.local.get(['dashboardState'], async (res) => {
+// --- 3. Persistent Initialization ---
+function init() {
+    chrome.storage.local.get(['dashboardState'], (res) => {
         try {
             if (res && res.dashboardState) {
-                appState = Object.assign({}, defaultState, res.dashboardState);
-                if (!appState.shortcuts || appState.shortcuts.length === 0) appState.shortcuts = JSON.parse(JSON.stringify(defaultShortcuts));
-                if (!appState.widgets || appState.widgets.length === 0) appState.widgets = JSON.parse(JSON.stringify(defaultState.widgets));
+                // Merge safely without wiping the saved custom background settings
+                appState = {
+                    ...defaultState,
+                    ...res.dashboardState,
+                    bg: {
+                        ...defaultBgState,
+                        ...(res.dashboardState.bg || {})
+                    }
+                };
+
+                if (!appState.shortcuts || appState.shortcuts.length === 0) {
+                    appState.shortcuts = JSON.parse(JSON.stringify(defaultShortcuts));
+                }
+                if (!appState.widgets || appState.widgets.length === 0) {
+                    appState.widgets = JSON.parse(JSON.stringify(defaultState.widgets));
+                }
             }
 
-            // Sync visual controls
+            // Sync settings to localStorage for the next instant new-tab open
+            localStorage.setItem('dash_bg_type', appState.bg.type || 'image');
+            localStorage.setItem('dash_bg_color', appState.bg.color || '#1a1a2e');
+
             applyDockBlur();
             applyShortcutsVisibility();
             applyAdaptiveIcons();
 
-            // AWAIT the background to load synchronously to perfectly align UI and Background
-            await applyBackground();
-
-            // Instantly render UI directly over the ready background
             renderWorkspace();
             renderShortcutsBar();
             renderEditShortcutsList();
@@ -146,6 +163,9 @@ async function init() {
             setInterval(setupClockTick, 1000);
             bindUI();
             bindModalUI();
+
+            // Refresh background layers without blanking out UI
+            applyBackground();
         } catch (err) {
             console.error("Init Error:", err);
             renderWorkspace();
@@ -156,6 +176,8 @@ async function init() {
 }
 
 function saveState() {
+    localStorage.setItem('dash_bg_type', appState.bg.type || 'image');
+    localStorage.setItem('dash_bg_color', appState.bg.color || '#1a1a2e');
     chrome.storage.local.set({ dashboardState: appState });
 }
 
@@ -194,11 +216,9 @@ async function applyBackground() {
             vidEl.pause();
             vidEl.style.display = 'none';
         } else {
-            bgColor.style.display = 'none'; // Force hide solid color
-            
-            const mediaData = await preloadedMediaPromise || await getMediaBlob('customBg');
-            preloadedMediaPromise = null;
+            bgColor.style.display = 'none';
 
+            const mediaData = await getMediaBlob('customBg');
             const activeEl = b.type === 'image' ? imgEl : vidEl;
             const inactiveEl = b.type === 'image' ? vidEl : imgEl;
 
@@ -206,12 +226,14 @@ async function applyBackground() {
             if (inactiveEl.tagName === 'VIDEO') inactiveEl.pause();
 
             if (activeEl) {
-                if (mediaData && mediaData instanceof Blob) {
-                    activeEl.src = URL.createObjectURL(mediaData);
-                } else if (mediaData && typeof mediaData === 'string') {
-                    activeEl.src = mediaData;
+                if (mediaData && typeof mediaData === 'string') {
+                    if (activeEl.src !== mediaData) {
+                        activeEl.src = mediaData;
+                    }
                 } else if (b.type === 'image') {
-                    activeEl.src = 'image_4af89b.jpg';
+                    if (!activeEl.src.includes('image_4af89b.jpg')) {
+                        activeEl.src = 'image_4af89b.jpg';
+                    }
                 }
 
                 if (b.type === 'video' && vidEl) {
@@ -225,7 +247,7 @@ async function applyBackground() {
             }
         }
     } catch (err) {
-        console.error("Background render error:", err);
+        console.error("Background error:", err);
     }
 }
 
@@ -327,7 +349,7 @@ function rebuildWidgetContent(w, el = null) {
                 <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; padding: 20px; color: white;">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="#1DB954" style="margin-bottom:12px;"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.84.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.6.18-1.2.72-1.38 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.56.3z"/></svg>
                     <h3 style="margin: 0 0 6px 0; font-size: 1.1rem; font-weight: 600;">Spotify Widget</h3>
-                    <p style="margin: 0; font-size: 0.85rem; opacity: 0.8; line-height: 1.4;">Click <b>⚙ Customize</b>, select this widget, and paste your own song or playlist link.</p>
+                    <p style="margin: 0; font-size: 0.85rem; opacity: 0.8; line-height: 1.4;">Click <b>⚙ Customize</b>, select this widget, and paste your track or playlist link.</p>
                 </div>
             `;
         }
@@ -347,9 +369,7 @@ function rebuildWidgetContent(w, el = null) {
                 <input type="text" class="todo-input" placeholder="Add task...">
                 <button class="btn-todo-add">+</button>
             </div>
-            <div class="todo-list">
-                ${tasksHtml}
-            </div>
+            <div class="todo-list">${tasksHtml}</div>
         `;
     } else if (w.type === 'notes') {
         const notes = w.notes || [];
@@ -371,9 +391,7 @@ function rebuildWidgetContent(w, el = null) {
                 <h3>Notes</h3>
                 <button class="btn-notes-add">+</button>
             </div>
-            <div class="notes-list">
-                ${notesHtml}
-            </div>
+            <div class="notes-list">${notesHtml}</div>
         `;
     }
 
@@ -665,7 +683,7 @@ window.addEventListener('mouseup', () => {
     isDraggingCrop = false;
 });
 
-// --- 8. UI Binding (Connected to Panel) ---
+// --- 8. UI Binding ---
 function bindUI() {
     const settingShowShortcuts = document.getElementById('setting-show-shortcuts');
     if (settingShowShortcuts) {
@@ -735,7 +753,6 @@ function bindUI() {
         };
     }
 
-    // UPDATED GITHUB LINK HERE
     const btnGithub = document.getElementById('btn-github');
     if (btnGithub) {
         btnGithub.onclick = () => window.open('https://github.com/RootAccessX31/glassmorphism_newtab_extension.git', '_blank');
@@ -819,7 +836,6 @@ function bindUI() {
         }
     }
 
-    // Customize Panel toggles
     const editModeBtn = document.getElementById('btn-edit-mode');
     const settingsPanel = document.getElementById('settings-panel');
     if (editModeBtn && settingsPanel) {
@@ -919,7 +935,6 @@ function bindUI() {
         };
     }
 
-    // Widgets management
     const btnAddClock = document.getElementById('btn-add-clock');
     if (btnAddClock) btnAddClock.onclick = () => addWidget('clock');
     const btnAddSearch = document.getElementById('btn-add-search');
@@ -931,7 +946,6 @@ function bindUI() {
     const btnAddNotes = document.getElementById('btn-add-notes');
     if (btnAddNotes) btnAddNotes.onclick = () => addWidget('notes');
 
-    // AI Tools Toggle
     const btnToggleAi = document.getElementById('btn-toggle-ai');
     const widgetAiTools = document.getElementById('widget-ai-tools');
     const widgetShortcuts = document.getElementById('widget-shortcuts');

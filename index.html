@@ -5,6 +5,32 @@
     <title>New Tab</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        // Synchronous early paint to guarantee immediate background display
+        (function() {
+            try {
+                const cachedType = localStorage.getItem('dash_bg_type') || 'image';
+                const cachedMedia = localStorage.getItem('dash_bg_media_cache');
+                const cachedColor = localStorage.getItem('dash_bg_color') || '#1a1a2e';
+                
+                document.addEventListener('DOMContentLoaded', () => {
+                    const bgColor = document.getElementById('bg-color');
+                    const img = document.getElementById('bg-image');
+                    const vid = document.getElementById('bg-video');
+
+                    if (bgColor) bgColor.style.backgroundColor = cachedColor;
+
+                    if (cachedType === 'image' && img) {
+                        img.src = cachedMedia || 'image_4af89b.jpg';
+                        img.style.display = 'block';
+                    } else if (cachedType === 'video' && vid && cachedMedia) {
+                        vid.src = cachedMedia;
+                        vid.style.display = 'block';
+                    }
+                });
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body>
     <!-- Background Layers -->
@@ -33,9 +59,7 @@
         </div>
 
         <!-- Saved Shortcuts Bar (Center) -->
-        <div id="widget-shortcuts" class="glass-pill-bar">
-            <!-- Dynamically populated via JS -->
-        </div>
+        <div id="widget-shortcuts" class="glass-pill-bar"></div>
     </div>
 
     <!-- UI Controls -->
@@ -43,10 +67,7 @@
 
     <!-- Material You Settings Panel -->
     <div id="settings-panel" class="hidden material-panel">
-        
-        <!-- Main Settings View -->
         <div id="main-settings-view">
-            <!-- Drag Handle -->
             <div class="panel-header">
                 <h2 class="mat-title" style="display: flex; align-items: center; gap: 8px;">
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4;"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>
@@ -61,7 +82,6 @@
             </div>
 
             <div class="mat-accordions">
-                
                 <!-- Shortcuts Section -->
                 <div class="mat-card">
                     <div class="mat-card-header"><h3>Shortcuts</h3><span class="chevron">▲</span></div>
@@ -125,7 +145,7 @@
                 </div>
                 
                 <!-- Appearance / Background -->
-                 <div class="mat-card">
+                <div class="mat-card">
                     <div class="mat-card-header"><h3>Appearance</h3><span class="chevron">▼</span></div>
                     <div class="mat-card-body hidden">
                         <div class="mat-text" style="margin-bottom: 5px;"><strong>Background Mode</strong></div>
@@ -153,8 +173,6 @@
                 <div id="widget-editor" class="mat-card hidden">
                     <div class="mat-card-header"><h3>Edit Selected Widget</h3><span class="chevron">▲</span></div>
                     <div class="mat-card-body">
-                        
-                        <!-- Spotify URL Input -->
                         <div id="spotify-edit-group" class="hidden">
                             <div class="mat-text"><strong>Spotify Link</strong></div>
                             <input type="text" id="edit-w-sp-url" placeholder="Paste Spotify track or playlist link..." class="mat-input" style="margin-bottom: 10px;">
@@ -166,7 +184,6 @@
                         <div class="mat-text"><strong>Glass Blur (px)</strong></div>
                         <input type="range" id="edit-w-blur" min="0" max="40" step="1" style="width: 100%; margin-bottom: 10px;">
 
-                        <!-- Corner Curve Control -->
                         <div class="mat-text"><strong>Corner Curve: <span id="val-w-radius">0</span>px</strong></div>
                         <input type="range" id="edit-w-radius" min="0" max="100" step="1" style="width: 100%; margin-bottom: 10px;">
 
@@ -186,25 +203,20 @@
                 </div>
             </div>
             <h2 class="mat-title" style="text-align: left; margin-bottom: 5px;">Saved Shortcuts</h2>
-            <p style="font-size: 0.8rem; color: #5f6368; margin-bottom: 20px;">You can add new shortcuts by clicking the "+" icon or edit existing ones by clicking on the shortcut name or URL. To reset a custom icon, simply clear the image URL.</p>
+            <p style="font-size: 0.8rem; color: #5f6368; margin-bottom: 20px;">You can add new shortcuts by clicking "+" or edit names, icons, and URLs below.</p>
             
-            <div id="shortcuts-edit-list" style="display: flex; flex-direction: column; gap: 10px;">
-                <!-- Dynamically populated edit cards -->
-            </div>
+            <div id="shortcuts-edit-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
         </div>
-
     </div>
 
-    <!-- Choose Visible Area / Media Customization Modal -->
+    <!-- Media Customization Modal -->
     <div id="media-crop-modal" class="modal-backdrop hidden">
         <div class="crop-modal-card">
-            <!-- Modal Header -->
             <div class="crop-modal-header">
                 <h3>Choose visible area</h3>
                 <button id="btn-crop-close" class="crop-icon-btn">✕</button>
             </div>
 
-            <!-- Preview Viewport -->
             <div id="crop-viewport" class="crop-viewport">
                 <div id="crop-media-wrapper" class="crop-media-wrapper">
                     <img id="crop-preview-img" alt="Preview">
@@ -213,7 +225,6 @@
                 <div class="crop-reposition-badge">Drag to reposition</div>
             </div>
 
-            <!-- Controls Row 1 (Blur & Brightness) -->
             <div class="crop-controls-row">
                 <button id="btn-crop-blur" class="crop-pill-btn">Blur: Off</button>
                 <div class="crop-slider-group">
@@ -223,7 +234,6 @@
                 </div>
             </div>
             
-            <!-- Video Sound Row (Only visible for videos) -->
             <div id="crop-video-sound-row" class="crop-controls-row" style="display: none; justify-content: space-between; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; padding: 12px 18px;">
                 <div style="display: flex; flex-direction: column;">
                     <strong style="font-size: 1rem; font-weight: 600;">Video Sound</strong>
@@ -232,7 +242,6 @@
                 <label class="mat-switch"><input type="checkbox" id="crop-video-sound"><span class="slider"></span></label>
             </div>
 
-            <!-- Controls Row 2 (Actions) -->
             <div class="crop-actions-row">
                 <div class="crop-actions-left">
                     <button id="btn-crop-center" class="crop-action-btn">Center</button>
@@ -247,7 +256,7 @@
         </div>
     </div>
 
-    <!-- Feedback Submission Modal -->
+    <!-- Feedback Modal -->
     <div id="feedback-modal" class="modal-backdrop hidden">
         <div class="crop-modal-card" style="width: 400px;">
             <div class="crop-modal-header">
