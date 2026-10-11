@@ -1,15 +1,4 @@
-// --- ANTI-FLASH INJECTION (Executes instantly to hide the dark-blue screen if video/image is selected) ---
-(function preventBackgroundFlash() {
-    const cachedBgType = localStorage.getItem('cachedBgType') || 'image';
-    if (cachedBgType === 'image' || cachedBgType === 'video') {
-        const style = document.createElement('style');
-        style.innerHTML = '#bg-color { display: none !important; }';
-        if (document.head) document.head.appendChild(style);
-        else document.documentElement.appendChild(style);
-    }
-})();
-
-// --- 1. Fast IndexedDB Wrapper (Native ArrayBuffer) ---
+// --- 1. IndexedDB Wrapper (For Media Blobs - Base64 Encoding for Chrome Stability) ---
 const DB_NAME = 'DashboardMediaDB';
 
 function initDB() {
@@ -30,22 +19,30 @@ function initDB() {
     });
 }
 
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
 async function saveMediaBlob(key, blob) {
     const db = await initDB();
     if (!db) return;
     try {
-        const buffer = await blob.arrayBuffer(); // Extremely fast binary storage
-        const type = blob.type;
+        const base64Data = await blobToBase64(blob);
         return new Promise(resolve => {
             try {
                 const tx = db.transaction('media', 'readwrite');
-                tx.objectStore('media').put({ buffer, type }, key);
+                tx.objectStore('media').put(base64Data, key);
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => resolve();
             } catch (e) { resolve(); }
         });
     } catch (e) {
-        console.error("Failed to save media buffer", e);
+        console.error("Failed to save media", e);
     }
 }
 
@@ -57,13 +54,7 @@ async function getMediaBlob(key) {
             const req = db.transaction('media').objectStore('media').get(key);
             req.onsuccess = () => {
                 const res = req.result;
-                if (res && res.buffer) {
-                    resolve(new Blob([res.buffer], { type: res.type })); // Fast binary reassembly
-                } else if (res) {
-                    resolve(res); 
-                } else {
-                    resolve(null);
-                }
+                resolve(res || null);
             };
             req.onerror = () => resolve(null);
         } catch (e) { resolve(null); }
@@ -217,6 +208,8 @@ async function applyBackground() {
             if (activeEl) {
                 if (mediaData && mediaData instanceof Blob) {
                     activeEl.src = URL.createObjectURL(mediaData);
+                } else if (mediaData && typeof mediaData === 'string') {
+                    activeEl.src = mediaData;
                 } else if (b.type === 'image') {
                     activeEl.src = 'image_4af89b.jpg';
                 }
@@ -742,9 +735,10 @@ function bindUI() {
         };
     }
 
+    // UPDATED GITHUB LINK HERE
     const btnGithub = document.getElementById('btn-github');
     if (btnGithub) {
-        btnGithub.onclick = () => window.open('https://github.com/', '_blank');
+        btnGithub.onclick = () => window.open('https://github.com/RootAccessX31/glassmorphism_newtab_extension.git', '_blank');
     }
 
     const feedbackModal = document.getElementById('feedback-modal');
@@ -825,6 +819,7 @@ function bindUI() {
         }
     }
 
+    // Customize Panel toggles
     const editModeBtn = document.getElementById('btn-edit-mode');
     const settingsPanel = document.getElementById('settings-panel');
     if (editModeBtn && settingsPanel) {
@@ -879,7 +874,6 @@ function bindUI() {
         bgTypeSelect.value = appState.bg.type;
         bgTypeSelect.onchange = (e) => {
             appState.bg.type = e.target.value;
-            localStorage.setItem('cachedBgType', e.target.value); // Cache for instant loads
             saveState();
             applyBackground();
         };
@@ -919,13 +913,13 @@ function bindUI() {
             const mediaType = isVideo ? 'video' : 'image';
 
             appState.bg.type = mediaType;
-            localStorage.setItem('cachedBgType', mediaType); // Cache for instant loads
             if (bgTypeSelect) bgTypeSelect.value = mediaType;
 
             openCropModal(file, mediaType);
         };
     }
 
+    // Widgets management
     const btnAddClock = document.getElementById('btn-add-clock');
     if (btnAddClock) btnAddClock.onclick = () => addWidget('clock');
     const btnAddSearch = document.getElementById('btn-add-search');
@@ -937,6 +931,7 @@ function bindUI() {
     const btnAddNotes = document.getElementById('btn-add-notes');
     if (btnAddNotes) btnAddNotes.onclick = () => addWidget('notes');
 
+    // AI Tools Toggle
     const btnToggleAi = document.getElementById('btn-toggle-ai');
     const widgetAiTools = document.getElementById('widget-ai-tools');
     const widgetShortcuts = document.getElementById('widget-shortcuts');
@@ -1121,7 +1116,6 @@ function bindModalUI() {
 
             const bgTypeSelect = document.getElementById('setting-bg-type');
             if (bgTypeSelect) bgTypeSelect.value = modalMediaType;
-            localStorage.setItem('cachedBgType', modalMediaType);
 
             saveState();
             await applyBackground();
